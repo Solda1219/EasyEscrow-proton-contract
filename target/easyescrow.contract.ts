@@ -6,6 +6,7 @@ import {
   Name,
   check,
   requireAuth,
+  hasAuth,
   isAccount,
   TableStore,
   Singleton,
@@ -271,17 +272,20 @@ class EscrowContract extends BalanceContract {
       `no escrow with ID ${escrowId} found.`
     );
     check(
-      escrow.from == from || escrow.to == to,
+      (hasAuth(escrow.from) || hasAuth(escrow.to)) &&
+        escrow.from == from &&
+        escrow.to == to,
       `Only ${escrow.from} and ${escrow.to} can call this netotiate action!`
     );
+    const caller = hasAuth(from) ? from : to;
+    const receiver = hasAuth(from) ? to : from;
     check(
       escrow.typeId == 3 || escrow.typeId == 4,
       `This is not for purchase!`
     );
-    const memo2 = `User wants to negotiate your offer. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
+    const memo2 = `${caller} wants to negotiate your offer. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
     const newPriceQuantity = GetMsgInterface();
-    this.withdrawAdmin(from, [newPriceQuantity], [], memo2);
-    this.withdrawAdmin(to, [newPriceQuantity], [], memo2);
+    this.withdrawAdmin(receiver, [newPriceQuantity], [], memo2);
     const newEscrow = new Escrow(
       escrowId,
       typeId,
@@ -297,11 +301,7 @@ class EscrowContract extends BalanceContract {
     // Update escrow
     this.escrowsTable.set(newEscrow, this.contract);
   }
-  /**
-   * It logs the escrow and its status.
-   * @param {escrow} escrow - The escrow object that is being updated.
-   * @param {string} status - The status of the escrow.
-   */
+
   //for purchase item, service
   @action("user2nego")
   user2nego(
@@ -352,6 +352,11 @@ class EscrowContract extends BalanceContract {
     // Update escrow
     this.escrowsTable.set(newEscrow, this.contract);
   }
+  /**
+   * It logs the escrow and its status.
+   * @param {escrow} escrow - The escrow object that is being updated.
+   * @param {string} status - The status of the escrow.
+   */
   @action("logescrow")
   logescrow(escrow: Escrow, status: string): void {
     requireAuth(this.contract);
