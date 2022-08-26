@@ -1,9 +1,32 @@
-import { ExtendedAsset, Name, Table, EMPTY_NAME } from "proton-tsc";
+import {
+  ExtendedAsset,
+  Name,
+  Table,
+  EMPTY_NAME,
+  Asset,
+  Symbol,
+} from "proton-tsc";
 
 @table("escrowglobal", singleton)
 export class EscrowGlobal extends Table {
   constructor(public escrowId: u64 = 0) {
     super();
+  }
+}
+@table("fees")
+export class Fee extends Table {
+  constructor(
+    public feeId: u64 = 0,
+    public feeVal: ExtendedAsset = new ExtendedAsset(
+      new Asset(250000, new Symbol("XUSDC", 6)),
+      Name.fromString("xtokens")
+    )
+  ) {
+    super();
+  }
+  @primary
+  get primary(): u64 {
+    return this.feeId;
   }
 }
 

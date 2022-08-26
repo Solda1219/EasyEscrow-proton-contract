@@ -1,5 +1,12 @@
 import * as _chain from "as-chain";
-import { ExtendedAsset, Name, Table, EMPTY_NAME } from "proton-tsc";
+import {
+  ExtendedAsset,
+  Name,
+  Table,
+  EMPTY_NAME,
+  Asset,
+  Symbol,
+} from "proton-tsc";
 
 
 
@@ -68,6 +75,93 @@ export class EscrowGlobal implements _chain.MultiIndexValue {
 
     static new(code: _chain.Name, scope: _chain.Name = _chain.EMPTY_NAME): _chain.Singleton<EscrowGlobal> {
         return new _chain.Singleton<EscrowGlobal>(code, scope, this.tableName);
+    }
+}
+
+
+export class FeeDB extends _chain.MultiIndex<Fee> {
+
+}
+
+@table("fees", nocodegen)
+
+export class Fee implements _chain.MultiIndexValue {
+    
+  constructor(
+    public feeId: u64 = 0,
+    public feeVal: ExtendedAsset = new ExtendedAsset(
+      new Asset(250000, new Symbol("XUSDC", 6)),
+      Name.fromU64(0xEE69054F00000000)
+    )
+  ) {
+    
+  }
+  @primary
+  get primary(): u64 {
+    return this.feeId;
+  }
+
+    pack(): u8[] {
+        let enc = new _chain.Encoder(this.getSize());
+        enc.packNumber<u64>(this.feeId);
+        enc.pack(this.feeVal);
+        return enc.getBytes();
+    }
+    
+    unpack(data: u8[]): usize {
+        let dec = new _chain.Decoder(data);
+        this.feeId = dec.unpackNumber<u64>();
+        
+        {
+            let obj = new ExtendedAsset();
+            dec.unpack(obj);
+            this.feeVal = obj;
+        }
+        return dec.getPos();
+    }
+
+    getSize(): usize {
+        let size: usize = 0;
+        size += sizeof<u64>();
+        size += this.feeVal.getSize();
+        return size;
+    }
+
+    static get tableName(): _chain.Name {
+        return _chain.Name.fromU64(0x5A95800000000000);
+    }
+
+    static tableIndexes(code: _chain.Name, scope: _chain.Name): _chain.IDXDB[] {
+        const idxTableBase: u64 = this.tableName.N & 0xfffffffffffffff0;
+        const indices: _chain.IDXDB[] = [
+        ];
+        return indices;
+    }
+
+    getTableName(): _chain.Name {
+        return Fee.tableName;
+    }
+
+    getTableIndexes(code: _chain.Name, scope: _chain.Name): _chain.IDXDB[] {
+        return Fee.tableIndexes(code, scope);
+    }
+
+    getPrimaryValue(): u64 {
+        return this.primary
+    }
+
+    getSecondaryValue(i: i32): _chain.SecondaryValue {
+        _chain.check(false, "no secondary value!");
+        return new _chain.SecondaryValue(_chain.SecondaryType.U64, new Array<u64>(0));
+    }
+    
+    setSecondaryValue(i: i32, value: _chain.SecondaryValue): void {
+        _chain.check(false, "no secondary value!");
+    }
+
+
+    static new(code: _chain.Name, scope: _chain.Name  = _chain.EMPTY_NAME): FeeDB {
+        return new FeeDB(code, scope, this.tableName, this.tableIndexes(code, scope));
     }
 }
 

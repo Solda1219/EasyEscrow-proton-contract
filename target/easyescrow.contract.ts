@@ -17,21 +17,43 @@ import {
 } from "proton-tsc";
 import { BalanceContract } from "proton-tsc/balance";
 import { ESCROW_STATUS, sendLogEscrow } from "./escrow.inline";
-import { EscrowGlobal, Escrow } from "./escrow.tables";
+import { EscrowGlobal, Escrow, Fee } from "./escrow.tables";
 
+//for testnet
+// function GetMsgInterface(): ExtendedAsset {
+//   const MSG_CONTRACT = Name.fromU64(0xEE69054F00000000);
+//   const MSG_SYMBOL = new Symbol("FOOBAR", 6);
+//   return new ExtendedAsset(new Asset(1, MSG_SYMBOL), MSG_CONTRACT);
+// }
+
+//for real net
 function GetMsgInterface(): ExtendedAsset {
-  const MSG_CONTRACT = Name.fromU64(0xEE69054F00000000);
-  const MSG_SYMBOL = new Symbol("FOOBAR", 6);
+  const MSG_CONTRACT = Name.fromU64(0xBA8D156326CAB0A0);
+  const MSG_SYMBOL = new Symbol("MESSAGE", 4);
   return new ExtendedAsset(new Asset(1, MSG_SYMBOL), MSG_CONTRACT);
 }
 
 @contract
 class EscrowContract extends BalanceContract {
   escrowsTable: TableStore<Escrow> = new TableStore<Escrow>(this.receiver);
+  feeTable: TableStore<Fee> = new TableStore<Fee>(this.receiver);
   escrowGlobalSingleton: Singleton<EscrowGlobal> = new Singleton<EscrowGlobal>(
     this.receiver
   );
+  //declare fee receiver
+  //for test net
+  // feeReceiver: Name = Name.fromU64(0x56117A732AC64200);
 
+  // for real net
+  feeReceiver: Name = Name.fromU64(0x56117A716A560000);
+  @action("setfee")
+  setfee(feeId: u64, feeVal: ExtendedAsset): void {
+    //only this contract owner can call this action
+    requireAuth(this.receiver);
+    // Get Fee
+    const fee = new Fee(feeId, feeVal);
+    this.feeTable.set(fee, this.contract);
+  }
   /**
    * It creates an escrow.
    * @param {u32} typeId - u32, (exchange: 1, gift: 2, purItem: 3, purService: 4, contest: 5)
@@ -61,6 +83,13 @@ class EscrowContract extends BalanceContract {
 
     // Pre-conditions
     this.checkContractIsNotPaused();
+    const fetchedFee = this.feeTable.get(0);
+
+    if (!fetchedFee) {
+      check(false, "Fee doesn't set");
+      return; // just for intellisense
+    }
+    const feeVal = fetchedFee.feeVal;
 
     // Validation
     check(
@@ -75,10 +104,12 @@ class EscrowContract extends BalanceContract {
     }
     check(
       fromTokens.length || fromNfts.length || toTokens.length || toNfts.length,
-      "must escrow atleast one token or NFT on a side"
+      "must escrow at least one token or NFT on a side"
     );
     //don't substract if the type is purchase
     if (typeId != 3 && typeId != 4) {
+      // Substract balances to see if user pays fee
+      this.substractBalance(from, [feeVal], fromNfts);
       // Substract balances
       this.substractBalance(from, fromTokens, fromNfts);
     }
@@ -109,11 +140,11 @@ class EscrowContract extends BalanceContract {
       let memo = "";
       if (typeId == 1) {
         // memo for exchange
-        memo = `${from} wants to exchange ${fromTokens[0]} to ${toTokens[0]} with you. Please visit here to accept or decline: https://easyescrow.io/exchange/${escrowId}/${from}`;
+        memo = `${from} wants to exchange ${fromTokens[0]} to ${toTokens[0]} with you. Details: https://easyescrow.io/exchange/${escrowId}/${from}`;
       } else if (typeId == 3) {
-        memo = `${from} wants to purchase an item from you. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
+        memo = `${from} wants to purchase an item from you. Details: https://easyescrow.io/escrow/purchase_item/${escrowId}`;
       } else if (typeId == 4) {
-        memo = `${from} wants to purchase a service from you. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
+        memo = `${from} wants to purchase a service from you. Details: https://easyescrow.io/escrow/purchase_service/${escrowId}`;
       }
       this.withdrawAdmin(to, [newPriceQuantity], [], memo);
     }
@@ -127,6 +158,8 @@ class EscrowContract extends BalanceContract {
    * @param {Name} actor - Name,
    * @param {u64} id - u64
    */
+
+  //sending fee in fillesc
   @action("fillescrow")
   fillescrow(actor: Name, id: u64): void {
     // Pre-conditions
@@ -143,16 +176,37 @@ class EscrowContract extends BalanceContract {
       escrow.to = actor;
     }
     let memo = "";
+    const fetchedFee = this.feeTable.get(0);
+
+    if (!fetchedFee) {
+      check(false, "Fee doesn't set");
+      return; // just for intellisense
+    }
+    const feeVal = fetchedFee.feeVal;
     // for exchange
     if (escrow.typeId == 1) {
       // Authenticate
       requireAuth(actor);
       check(escrow.to == actor, `only ${escrow.to} can fill this escrow`);
+      // Substract balances to see if user pays fee
+      this.substractBalance(actor, [feeVal], []);
       // Substract balances
       this.substractBalance(escrow.to, escrow.toTokens, escrow.toNfts);
       // Erase
       this.escrowsTable.remove(escrow);
-
+      //Fee collecting
+      this.withdrawAdmin(
+        this.feeReceiver,
+        [feeVal],
+        [],
+        `fee collected for escrow id ${id} for exchange.`
+      );
+      this.withdrawAdmin(
+        this.feeReceiver,
+        [feeVal],
+        [],
+        `fee collected for escrow id ${id} for exchange.`
+      );
       // Send out
       memo = `escrow ${id} completed!`;
       this.withdrawAdmin(escrow.from, escrow.toTokens, escrow.toNfts, memo);
@@ -173,26 +227,40 @@ class EscrowContract extends BalanceContract {
 
       // Erase
       this.escrowsTable.remove(escrow);
-
+      //Fee collecting
+      this.withdrawAdmin(
+        this.feeReceiver,
+        [feeVal],
+        [],
+        `fee collected for escrow id ${id} for gift.`
+      );
       // Send out
-      memo = `${escrow.from} sent a gift!`;
+      memo = `${escrow.from} sent a gift.`;
       this.withdrawAdmin(escrow.to, escrow.fromTokens, escrow.fromNfts, memo);
     } else if (escrow.typeId == 3 || escrow.typeId == 4) {
       requireAuth(actor);
+      // Substract balances to see if user pays fee
+      this.substractBalance(actor, [feeVal], []);
       // Substract balances. check if from sent fund to our contract
       this.substractBalance(escrow.from, escrow.fromTokens, escrow.fromNfts);
-      check(escrow.from == actor, `only ${escrow.from} can fill this escrow`);
+      check(escrow.from == actor, `only ${escrow.from} can fill this escrow.`);
 
       // Erase
       this.escrowsTable.remove(escrow);
 
       // Send out
       if (escrow.typeId == 3) {
-        memo = `${escrow.id} for purchase an item completed`;
+        memo = `${escrow.id} for purchase an item completed.`;
       } else if (escrow.typeId == 4) {
-        memo = `${escrow.id} for purchase a service completed`;
+        memo = `${escrow.id} for purchase a service completed.`;
       }
-
+      //Fee collecting
+      this.withdrawAdmin(
+        this.feeReceiver,
+        [feeVal],
+        [],
+        `fee collected for escrow id ${id} for purchase.`
+      );
       this.withdrawAdmin(escrow.to, escrow.fromTokens, escrow.fromNfts, memo);
     }
 
@@ -231,7 +299,21 @@ class EscrowContract extends BalanceContract {
 
     // Erase
     this.escrowsTable.remove(escrow);
+    const fetchedFee = this.feeTable.get(0);
 
+    if (!fetchedFee) {
+      check(false, "Fee doesn't set");
+      return; // just for intellisense
+    }
+    const feeVal = fetchedFee.feeVal;
+
+    //send fee
+    this.withdrawAdmin(
+      escrow.from,
+      [feeVal],
+      escrow.fromNfts,
+      `fee for escrow ${id} cancelled!`
+    );
     // Send out
     this.withdrawAdmin(
       escrow.from,
@@ -283,7 +365,11 @@ class EscrowContract extends BalanceContract {
       escrow.typeId == 3 || escrow.typeId == 4,
       `This is not for purchase!`
     );
-    const memo2 = `${caller} wants to negotiate your offer. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
+    let memo2 = `${caller} wants to negotiate your offer. Details: https://easyescrow.io/escrow/purchase_item/${escrowId}`;
+
+    if (escrow.typeId == 4) {
+      memo2 = `${caller} wants to negotiate your offer. Details: https://easyescrow.io/escrow/purchase_service/${escrowId}`;
+    }
     const newPriceQuantity = GetMsgInterface();
     this.withdrawAdmin(receiver, [newPriceQuantity], [], memo2);
     const newEscrow = new Escrow(
@@ -334,7 +420,11 @@ class EscrowContract extends BalanceContract {
     check(escrow.from == from, "Wrong escrow!");
     const memo1 = "negotiate from user2";
     this.withdrawAdmin(escrow.from, escrow.fromTokens, escrow.fromNfts, memo1);
-    const memo2 = `${to} wants to negotiate your offer. Please visit here to see details: https://easyescrow.io/escrow/${escrowId}`;
+    let memo2 = `${to} wants to negotiate your offer. Details: https://easyescrow.io/escrow/purchase_item/${escrowId}`;
+
+    if (escrow.typeId == 4) {
+      memo2 = `${to} wants to negotiate your offer. Details: https://easyescrow.io/escrow/purchase_service/${escrowId}`;
+    }
     const newPriceQuantity = GetMsgInterface();
     this.withdrawAdmin(from, [newPriceQuantity], [], memo2);
     const newEscrow = new Escrow(
@@ -363,6 +453,40 @@ class EscrowContract extends BalanceContract {
   }
 }
 
+
+class setfeeAction implements _chain.Packer {
+    constructor (
+        public feeId: u64 = 0,
+        public feeVal: _chain.ExtendedAsset | null = null,
+    ) {
+    }
+
+    pack(): u8[] {
+        let enc = new _chain.Encoder(this.getSize());
+        enc.packNumber<u64>(this.feeId);
+        enc.pack(this.feeVal!);
+        return enc.getBytes();
+    }
+    
+    unpack(data: u8[]): usize {
+        let dec = new _chain.Decoder(data);
+        this.feeId = dec.unpackNumber<u64>();
+        
+        {
+            let obj = new _chain.ExtendedAsset();
+            dec.unpack(obj);
+            this.feeVal! = obj;
+        }
+        return dec.getPos();
+    }
+
+    getSize(): usize {
+        let size: usize = 0;
+        size += sizeof<u64>();
+        size += this.feeVal!.getSize();
+        return size;
+    }
+}
 
 class startescrowAction implements _chain.Packer {
     constructor (
@@ -962,6 +1086,11 @@ export function apply(receiver: u64, firstReceiver: u64, action: u64): void {
 	const actionData = _chain.readActionData();
 
 	if (receiver == firstReceiver) {
+		if (action == 0xC2B2B52800000000) {//setfee
+            const args = new setfeeAction();
+            args.unpack(actionData);
+            mycontract.setfee(args.feeId,args.feeVal!);
+        }
 		if (action == 0xC64D7CAB08BD3800) {//startescrow
             const args = new startescrowAction();
             args.unpack(actionData);
